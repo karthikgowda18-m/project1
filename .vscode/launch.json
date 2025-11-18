@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend (uvicorn)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "cmd.exe",
+      "args": [
+        "/c",
+        "${workspaceFolder}\\venv\\Scripts\\python.exe -m uvicorn backend.main:app --reload --port 8000"
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Worker (worker.py)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "cmd.exe",
+      "args": [
+        "/c",
+        "${workspaceFolder}\\venv\\Scripts\\python.exe worker.py"
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Frontend (Streamlit)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "cmd.exe",
+      "args": [
+        "/c",
+        "${workspaceFolder}\\venv\\Scripts\\python.exe -m streamlit run frontend/app.py --server.port 8501"
+      ],
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Start All",
+      "configurations": [
+        "Backend (uvicorn)",
+        "Worker (worker.py)",
+        "Frontend (Streamlit)"
+      ]
+    }
+  ]
+}

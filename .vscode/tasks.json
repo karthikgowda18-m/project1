@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install requirements",
+      "type": "shell",
+      "command": "${workspaceFolder}/venv/Scripts/python.exe -m pip install --upgrade pip && ${workspaceFolder}/venv/Scripts/python.exe -m pip install -r requirements.txt",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Start Backend (uvicorn)",
+      "type": "shell",
+      "command": "${workspaceFolder}/venv/Scripts/python.exe -m uvicorn backend.main:app --reload --port 8000",
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
+      "label": "Start Worker",
+      "type": "shell",
+      "command": "${workspaceFolder}/venv/Scripts/python.exe worker.py",
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
+      "label": "Start Frontend (Streamlit)",
+      "type": "shell",
+      "command": "${workspaceFolder}/venv/Scripts/python.exe -m streamlit run frontend/app.py --server.port 8501",
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    }
+  ]
+}
