@@ -1,34 +1,35 @@
-# frontend/app.py
-
 import streamlit as st
 import yfinance as yf
 import plotly.express as px
 import pandas as pd
+import requests
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st_autorefresh = None
+# ---------- CRYPTO SHORTCUTS ----------
+CRYPTO_MAP = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+    "BNB": "BNB-USD",
+    "XRP": "XRP-USD",
+    "DOGE": "DOGE-USD",
+    "ADA": "ADA-USD",
+    "SOL": "SOL-USD",
+    "DOT": "DOT-USD",
+    "MATIC": "MATIC-USD",
+}
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
-    page_title="Live Stock Dashboard",
+    page_title="Live Market Dashboard",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ---------- CUSTOM CSS (dark UI) ----------
+# ---------- GLOBAL STYLE ----------
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #050609;
-        color: #f9fafb;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #050609;
-        border-right: 1px solid #1f2937;
-    }
+    .main { background-color: #050609; color: #f9fafb; }
+    [data-testid="stSidebar"] { background-color: #050609; border-right: 1px solid #1f2937; }
     .card {
         background: #111827;
         border-radius: 16px;
@@ -36,347 +37,244 @@ st.markdown(
         border: 1px solid #1f2937;
         box-shadow: 0 10px 25px rgba(0,0,0,0.35);
     }
-    .card-title {
-        font-size: 0.85rem;
-        color: #9ca3af;
-        margin-bottom: 4px;
-    }
-    .card-value {
-        font-size: 1.4rem;
-        font-weight: 600;
-        color: #f9fafb;
-    }
-    .card-sub {
-        font-size: 0.8rem;
-        color: #6b7280;
-    }
+    .card-title { font-size: 0.85rem; color: #9ca3af; margin-bottom: 4px; }
+    .card-value { font-size: 1.4rem; font-weight: 600; color: #f9fafb; }
+    .card-sub { font-size: 0.8rem; color: #6b7280; }
     .positive { color: #22c55e; }
     .negative { color: #f97373; }
-    .section-title {
-        font-size: 1.1rem;
-        font-weight: 600;
-        margin-bottom: 0.4rem;
-        color: #e5e7eb;
-    }
+    .section-title { font-size: 1.2rem; font-weight: 600; margin-bottom: 0.4rem; color: #e5e7eb; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------- SIDEBAR NAV ----------
-with st.sidebar:
-    st.markdown("### 🪙 MetaMint (Demo)")
-    st.markdown("---")
-    st.markdown("**Dashboard**")
-    st.markdown("• Active Stocks\n• Dividend Insights\n• Hybrid Funds")
-    st.markdown("---")
-    st.markdown("**Account**")
-    st.markdown("• Portfolio\n• History\n• News\n• Settings")
-    st.markdown("---")
-    refresh_sec = st.slider(
-        "Auto-refresh (seconds)",
-        5,
-        60,
-        15,
-        help="Page will auto-reload.",
-    )
-    interval = st.selectbox(
-        "Chart interval",
-        ["1m", "5m", "15m", "1h", "1d"],
-        index=1,
-        help="Smaller interval = more detailed intraday chart.",
-    )
-
-# auto refresh whole page
-if st_autorefresh is not None:
-    st_autorefresh(interval=refresh_sec * 1000, key="autorefresh")
-
-# ---------- TOP BAR: title + SEARCH ----------
-top_left, top_right = st.columns([3, 2])
-with top_left:
-    st.markdown("## 📈 Dashboard")
-
-with top_right:
-    symbol_input = st.text_input(
-        "Search stock symbol",
-        value="AAPL",
-        placeholder="Example: AAPL, TSLA, RELIANCE.NS, INFY.NS",
-    )
-
-symbol = symbol_input.strip().upper()
-if not symbol:
-    st.warning("Please enter a stock symbol in the search bar.")
-    st.stop()
-
-# ---------- DATA FETCH HELPERS ----------
-
-def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """If df has MultiIndex columns (e.g. ('Close','AAPL')), flatten to simple names."""
+# ---------- HELPERS ----------
+def flatten_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten MultiIndex columns like ('Close','AAPL') -> 'Close'."""
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.copy()
-        df.columns = [str(col[0]) if isinstance(col, tuple) else str(col) for col in df.columns]
-    else:
-        df = df.copy()
-        df.columns = [str(c) for c in df.columns]
+        df.columns = [col[0] for col in df.columns]
     return df
 
 
-@st.cache_data(ttl=30)
-def load_intraday(sym: str, interval: str = "5m"):
-    """
-    Fetch intraday / recent history from yfinance.
-    Cached for 30 seconds.
-    """
-    try:
-        df = yf.download(sym, period="5d", interval=interval, progress=False)
-        if df is None or df.empty:
-            df = yf.download(sym, period="1mo", interval="1d", progress=False)
-        if df is None or df.empty:
-            return None
-        df = _flatten_columns(df)
-        return df.reset_index()
-    except Exception:
-        return None
+def detect_asset_type(sym: str) -> str:
+    if sym.endswith("=X"):
+        return "Currency Pair"
+    elif "-" in sym:
+        return "Cryptocurrency"
+    return "Stock / ETF"
 
 
-@st.cache_data(ttl=3600)
-def load_year_range(sym: str):
-    """
-    Fetch 1-year data to compute 52-week high/low.
-    Cached for 1 hour.
-    """
-    try:
-        df = yf.download(sym, period="1y", interval="1d", progress=False)
-        if df is None or df.empty:
-            return None, None
-        df = _flatten_columns(df)
-        cols = df.columns
-        low_col = "Low" if "Low" in cols else "Close"
-        high_col = "High" if "High" in cols else "Close"
-        low = float(df[low_col].min())
-        high = float(df[high_col].max())
-        return low, high
-    except Exception:
-        return None, None
+# ---------- SIDEBAR ----------
+with st.sidebar:
+    st.markdown("### 💹 Live Tracker")
+    refresh_sec = st.slider("Auto-refresh (seconds)", 5, 60, 15)
+    interval = st.selectbox("Interval", ["1m", "5m", "15m", "1h", "1d"], index=1)
+    st.markdown("---")
+    st.markdown("💡 Examples:")
+    st.markdown("- AAPL, TSLA (Stocks)")
+    st.markdown("- BTC or BTC-USD (Crypto)")
+    st.markdown("- USDINR=X (Currency pair)")
+    st.markdown("- RELIANCE.NS (NSE India)")
 
+# optional auto-refresh
+try:
+    from streamlit_autorefresh import st_autorefresh
 
-hist_df = load_intraday(symbol, interval)
+    st_autorefresh(interval=refresh_sec * 1000, key="auto_refresh")
+except ImportError:
+    pass
 
-if hist_df is None or hist_df.empty:
+# ---------- HEADER ----------
+st.markdown("## 📊 Live Market Dashboard")
+
+# ---------- SYMBOL INPUT ----------
+symbol_input = st.text_input(
+    "Search symbol:",
+    value="AAPL",
+    placeholder="Try: BTC, BTC-USD, USDINR=X, RELIANCE.NS, TSLA",
+)
+symbol_input = symbol_input.strip().upper()
+symbol = CRYPTO_MAP.get(symbol_input, symbol_input)
+
+# ---------- VALIDATE SYMBOL ----------
+test_data = yf.Ticker(symbol).history(period="1d")
+if test_data.empty:
     st.error(
-        f"No price data received from Yahoo Finance for **{symbol}**.\n"
-        "Check the symbol or your internet connection."
+        f"No data found for **'{symbol_input}'**.\n\n"
+        "Try valid formats like **BTC-USD**, **TSLA**, **USDINR=X**, **RELIANCE.NS**."
     )
     st.stop()
 
-year_low_raw, year_high_raw = load_year_range(symbol)
+asset_type = detect_asset_type(symbol)
 
-# ---------- BASIC NUMBERS FROM HISTORY ONLY ----------
+# ---------- DATA FETCH ----------
+@st.cache_data(ttl=30)
+def load_data(sym: str, interval: str):
+    df = yf.download(sym, period="5d", interval=interval, progress=False)
+    if df.empty:
+        df = yf.download(sym, period="1mo", interval="1d", progress=False)
+    if df.empty:
+        return None
+    return flatten_df(df.reset_index())
 
-close_series = hist_df["Close"]
-last_close = float(close_series.iloc[-1])
-prev_close = float(close_series.iloc[-2]) if len(close_series) > 1 else None
 
-if "Open" in hist_df.columns:
-    open_price = float(hist_df["Open"].iloc[-1])
+hist_df = load_data(symbol, interval)
+if hist_df is None:
+    st.error("Failed to download price data from Yahoo Finance.")
+    st.stop()
+
+# ---------- BASIC METRICS ----------
+last_close = float(hist_df["Close"].iloc[-1])
+prev_close = float(hist_df["Close"].iloc[-2]) if len(hist_df) > 1 else last_close
+day_high = float(hist_df["High"].iloc[-1])
+day_low = float(hist_df["Low"].iloc[-1])
+volume = int(hist_df["Volume"].iloc[-1]) if "Volume" in hist_df else None
+
+change = last_close - prev_close
+change_pct = (change / prev_close * 100) if prev_close else 0.0
+change_class = "positive" if change >= 0 else "negative"
+
+fmt = lambda v: f"{v:.2f}" if v is not None else "N/A"
+
+# ---------- METRIC CARDS ----------
+st.markdown("### 📌 Key Metrics")
+c1, c2, c3, c4 = st.columns(4)
+
+c1.markdown(
+    f"""
+    <div class="card">
+        <div class="card-title">{asset_type} — {symbol}</div>
+        <div class="card-value">{fmt(last_close)}</div>
+        <div class="card-sub">Prev Close: {fmt(prev_close)}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+c2.markdown(
+    f"""
+    <div class="card">
+        <div class="card-title">Day Change</div>
+        <div class="card-value {change_class}">{fmt(last_close)}</div>
+        <div class="card-sub {change_class}">{change:+.2f} ({change_pct:+.2f}%)</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+c3.markdown(
+    f"""
+    <div class="card">
+        <div class="card-title">Day Range</div>
+        <div class="card-value">{fmt(day_low)} – {fmt(day_high)}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+c4.markdown(
+    f"""
+    <div class="card">
+        <div class="card-title">Volume</div>
+        <div class="card-value">{volume if volume is not None else "N/A"}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------- PRICE CHART ----------
+st.markdown("### 📈 Price Chart")
+
+chart_df = hist_df.copy()
+time_col = chart_df.columns[0]
+chart_df[time_col] = chart_df[time_col].astype(str)
+
+fig = px.line(
+    chart_df,
+    x=time_col,
+    y="Close",
+    labels={"Close": f"{symbol} Price", time_col: "Time"},
+)
+fig.update_layout(template="plotly_dark", height=400)
+st.plotly_chart(fig, use_container_width=True)
+
+# ---------- RECENT DATA TABLE ----------
+st.markdown("### 🧾 Recent Price History")
+st.dataframe(
+    chart_df[[time_col, "Close"]].tail(20),
+    use_container_width=True,
+)
+
+# ---------- WEATHER SECTION ----------
+st.markdown("---")
+st.markdown("## 🌤 Live Local Weather")
+
+API_KEY = "89e49d4efad746c0d9609568c4002014"
+
+# 1) Try to detect city from IP
+auto_city = ""
+auto_country = ""
+try:
+    ip_info = requests.get("https://ipinfo.io", timeout=5).json()
+    auto_city = ip_info.get("city", "") or ""
+    auto_country = ip_info.get("country", "") or ""
+except Exception:
+    auto_city = ""
+    auto_country = ""
+
+# 2) Let user override / type any city
+col_city, col_unit = st.columns([3, 1])
+with col_city:
+    city_input = st.text_input(
+        "Enter city name (or keep detected):",
+        value=auto_city,
+        placeholder="Example: Chennai, London, Dubai",
+    )
+with col_unit:
+    unit = st.selectbox("Units", ["metric", "imperial"], index=0)
+
+city_to_use = city_input.strip()
+
+if city_to_use:
+    units_label_temp = "°C" if unit == "metric" else "°F"
+    units_label_wind = "m/s" if unit == "metric" else "mph"
+
+    weather_url = (
+        f"http://api.openweathermap.org/data/2.5/weather"
+        f"?q={city_to_use}&appid={API_KEY}&units={unit}"
+    )
+
+    try:
+        resp = requests.get(weather_url, timeout=8)
+        data = resp.json()
+
+        if str(data.get("cod")) != "200":
+            msg = data.get("message", "Unknown error")
+            st.warning(f"Unable to fetch weather for **{city_to_use}**: {msg}")
+        else:
+            temp = data["main"]["temp"]
+            condition = data["weather"][0]["description"].title()
+            humidity = data["main"]["humidity"]
+            wind = data["wind"]["speed"]
+
+            st.markdown(
+                f"""
+                <div class="card">
+                    <div class="card-title">📍 Location: {city_to_use}</div>
+                    <div class="card-value">{temp:.1f}{units_label_temp}</div>
+                    <div class="card-sub">{condition}</div>
+                    <div class="card-sub">
+                        💧 Humidity: {humidity}% &nbsp;|&nbsp;
+                        🌬 Wind: {wind} {units_label_wind}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        st.error("Error retrieving weather data. Please check your internet connection.")
 else:
-    open_price = last_close
+    st.info("Enter a city name above to view weather conditions.")
 
-if "Low" in hist_df.columns:
-    day_low = float(hist_df["Low"].iloc[-1])
-else:
-    day_low = last_close
-
-if "High" in hist_df.columns:
-    day_high = float(hist_df["High"].iloc[-1])
-else:
-    day_high = last_close
-
-if "Volume" in hist_df.columns:
-    volume = float(hist_df["Volume"].iloc[-1])
-else:
-    volume = None
-
-year_low = year_low_raw if year_low_raw is not None else day_low
-year_high = year_high_raw if year_high_raw is not None else day_high
-
-if prev_close is not None and prev_close != 0:
-    change = last_close - prev_close
-    change_pct = (change / prev_close) * 100
-else:
-    change = None
-    change_pct = None
-
-change_class = "positive" if (change or 0) >= 0 else "negative"
-
-# formatted display values
-def fmt_price(v):
-    return f"{v:.2f}" if v is not None else "N/A"
-
-last_price_val = fmt_price(last_close)
-prev_close_val = fmt_price(prev_close)
-day_low_val = fmt_price(day_low)
-day_high_val = fmt_price(day_high)
-open_price_val = fmt_price(open_price)
-year_low_val = fmt_price(year_low)
-year_high_val = fmt_price(year_high)
-volume_val = f"{int(volume):,}" if isinstance(volume, (int, float)) and volume is not None else "N/A"
-
-if change is not None and change_pct is not None:
-    change_text = f"{change:+.2f} ({change_pct:+.2f}%)"
-else:
-    change_text = "N/A"
-
-# ---------- TOP METRIC CARDS ----------
-row1 = st.columns(4)
-
-with row1[0]:
-    st.markdown(
-        f"""
-        <div class="card">
-          <div class="card-title">{symbol} price</div>
-          <div class="card-value">{last_price_val}</div>
-          <div class="card-sub">
-            Prev close: {prev_close_val}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with row1[1]:
-    st.markdown(
-        f"""
-        <div class="card">
-          <div class="card-title">Day change</div>
-          <div class="card-value {change_class}">
-            {last_price_val}
-          </div>
-          <div class="card-sub"><span class="{change_class}">{change_text}</span></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with row1[2]:
-    st.markdown(
-        f"""
-        <div class="card">
-          <div class="card-title">Day range</div>
-          <div class="card-value">
-            {day_low_val} – {day_high_val}
-          </div>
-          <div class="card-sub">Open: {open_price_val}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with row1[3]:
-    st.markdown(
-        f"""
-        <div class="card">
-          <div class="card-title">52-week range</div>
-          <div class="card-value">
-            {year_low_val} – {year_high_val}
-          </div>
-          <div class="card-sub">Volume: {volume_val}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# ---------- SECOND ROW: CHART + MINI TABLE ----------
-st.markdown("")
-row2_left, row2_right = st.columns([3, 2])
-
-with row2_left:
-    st.markdown('<div class="section-title">Price chart</div>', unsafe_allow_html=True)
-
-    if "Datetime" in hist_df.columns:
-        x_col = "Datetime"
-    elif "Date" in hist_df.columns:
-        x_col = "Date"
-    else:
-        x_col = hist_df.columns[0]
-
-    fig = px.line(
-        hist_df,
-        x=x_col,
-        y="Close",
-        labels={"Close": "Price", x_col: "Time"},
-    )
-    fig.update_layout(
-        height=350,
-        margin=dict(l=10, r=10, t=30, b=10),
-        showlegend=False,
-        paper_bgcolor="#111827",
-        plot_bgcolor="#111827",
-        font=dict(color="#e5e7eb"),
-        xaxis=dict(gridcolor="#1f2937"),
-        yaxis=dict(gridcolor="#1f2937"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-with row2_right:
-    st.markdown('<div class="section-title">Recent data</div>', unsafe_allow_html=True)
-
-    if "Datetime" in hist_df.columns:
-        tcol = "Datetime"
-    elif "Date" in hist_df.columns:
-        tcol = "Date"
-    else:
-        tcol = hist_df.columns[0]
-
-    tail = hist_df[[tcol, "Close"]].copy().tail(20)
-    tail.rename(columns={tcol: "Time"}, inplace=True)
-    tail["Time"] = tail["Time"].astype(str)
-    st.dataframe(tail, use_container_width=True, height=350)
-
-# ---------- THIRD ROW: EXTRA SECTIONS ----------
-st.markdown("")
-row3 = st.columns(3)
-
-with row3[0]:
-    st.markdown('<div class="section-title">Notes</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="card">
-        <span class="card-sub">
-        • Type different symbols in the search bar (AAPL, TSLA, RELIANCE.NS, INFY.NS).<br>
-        • Data auto-refreshes every few seconds based on your setting.<br>
-        • Values are computed from Yahoo Finance price history only.
-        </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with row3[1]:
-    st.markdown('<div class="section-title">Watchlist idea</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="card">
-        <span class="card-sub">
-        You can extend this page to support a saved watchlist,
-        alerts, or multiple symbols displayed together.
-        </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with row3[2]:
-    st.markdown('<div class="section-title">Next features</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="card">
-        <span class="card-sub">
-        • Add portfolio holdings<br>
-        • Add P&L calculation<br>
-        • Add news feed for the selected symbol
-        </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+st.markdown("---")
+st.info("💡 Dashboard supports Stocks, Crypto, Currencies, and Weather — all in one place.")
