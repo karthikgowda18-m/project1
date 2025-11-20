@@ -220,6 +220,7 @@ try:
     auto_country = ip_info.get("country", "") or ""
 except Exception:
     auto_city = ""
+    
     auto_country = ""
 
 # 2) Let user override / type any city
